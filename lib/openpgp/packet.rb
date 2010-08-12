@@ -147,13 +147,59 @@ module OpenPGP
       attr_accessor :key_algorithm, :hash_algorithm
       attr_accessor :key_id
       attr_accessor :fields
+      attr_accessor :hashed_subpackets, :unhashed_subpackets
+      attr_accessor :hash_head, :trailer
 
       def self.parse_body(body, options = {})
+        @hashed_subpackets = @unhashed_subpackets = []
         case version = body.read_byte
           when 3 then self.new(:version => 3).send(:read_v3_signature, body)
           when 4 then self.new(:version => 4).send(:read_v4_signature, body)
           else raise "Invalid OpenPGP signature packet version: #{version}"
         end
+      end
+
+      def key_algorithm_name
+          name = OpenPGP::Algorithm::Asymmetric::constants.select do |const|
+            OpenPGP::Algorithm::Asymmetric::const_get(const) == key_algorithm
+          end.first
+          name = :RSA if name == :RSA_S || name == :RSA_E
+          name.to_s
+      end
+
+      def hash_algorithm_name
+        OpenPGP::Digest::for(hash_algorithm).algorithm.to_s
+      end
+
+      def issuer
+        [hashed_subpackets + unhashed_subpackets].select {|packet|
+          packet.is_a?(OpenPGP::Packet::Signature::Issuer)
+        }.first
+      end
+
+      def update_trailer
+        @trailer = body(true)
+      end
+
+      def body(trailer=false)
+        body = 4.chr + type.chr + key_algorithm.chr + hash_algorithm.chr
+
+        sub = hashed_subpackets.inject('') {|c,p| c + p.to_s}
+        body << [sub.length].pack('n') + sub
+
+        # The trailer is just the top of the body plus some crap
+        return body + 4.chr + 0xff.chr + [body.length].pack('N')
+
+        sub = unhashed_subpackets.inject('') {|c,p| c + p.to_s}
+        body << [sub.length].pack('n') + sub
+
+        body << [hash_head].pack('n')
+
+        fields.each {|data|
+          body << [data.length*8].pack('n')
+          body << data
+        }
+        body
       end
 
       protected
@@ -164,7 +210,7 @@ module OpenPGP
           raise "Invalid OpenPGP signature packet V3 header" if body.read_byte != 5
           @type, @timestamp, @key_id = body.read_byte, body.read_number(4), body.read_number(8, 16)
           @key_algorithm, @hash_algorithm = body.read_byte, body.read_byte
-          body.read_bytes(2)
+          @hash_head = body.read_bytes(2)
           read_signature(body)
           self
         end
@@ -174,11 +220,54 @@ module OpenPGP
         def read_v4_signature(body)
           @type = body.read_byte
           @key_algorithm, @hash_algorithm = body.read_byte, body.read_byte
-          body.read_bytes(hashed_count = body.read_number(2))
-          body.read_bytes(unhashed_count = body.read_number(2))
-          body.read_bytes(2)
+          # We store exactly the original trailer for doing verifications
+          @trailer = 4.chr + type.chr + key_algorithm.chr + hash_algorithm.chr
+          hashed_count = body.read_number(2)
+          hashed_data = body.read_bytes(hashed_count)
+          @trailer << [hashed_count].pack('n') + hashed_data + 4.chr + 0xff.chr + [6 + hashed_count].pack('N')
+          @hashed_subpackets = read_subpackets(Buffer.new(hashed_data))
+          unhashed_count = body.read_number(2)
+          unhashed_data = body.read_bytes(unhashed_count)
+          @unhashed_subpackets = read_subpackets(Buffer.new(unhashed_data))
+          @hash_head = body.read_bytes(2)
           read_signature(body)
           self
+        end
+
+        ##
+        # @see http://tools.ietf.org/html/rfc4880#section-5.2.3.1
+        def read_subpackets(buf)
+          packets = []
+          until buf.eof?
+            if packet = read_subpacket(buf)
+              packets << packet
+            else
+              raise "Invalid OpenPGP message data at position #{body.pos+buf.pos}"
+            end
+          end
+          packets
+        end
+
+        def read_subpacket(buf)
+          length = buf.read_byte.ord
+          length_of_length = 1
+          # if len < 192 One octet length, no furthur processing
+          if length > 190 && length < 255 # Two octet length
+            length_of_length = 2
+            length = ((length - 192) << 8) + buf.read_byte.ord + 192
+          end
+          if length == 255 # Five octet length
+            length_of_length = 5
+            length = buf.read_unpacked(4, 'N')
+          end
+
+          tag = buf.read_byte.ord
+          self.class.const_get(self.class.constants.select {|t|
+            self.class.const_get(t).const_defined?(:TAG) && \
+            self.class.const_get(t)::TAG == tag
+          }.first).parse_body(Buffer.new(buf.read(length)), :tag => tag)
+        #rescue Exception
+        #  nil # Parse error, return no subpacket
         end
 
         ##
@@ -192,6 +281,147 @@ module OpenPGP
             else
               raise "Unknown OpenPGP signature packet public-key algorithm: #{key_algorithm}"
           end
+        end
+
+        class Subpacket < Packet
+          def header_and_body
+            b = body
+            # Use 5-octet lengths + 1 for tag as first packet body octet
+            size = 255.chr + [body.length+1].pack('N')
+            tag = self.get_const(:TAG).chr
+            {:header => size + tag, :body => body}
+          end
+        end
+
+        ##
+        # @see http://tools.ietf.org/html/rfc4880#section-5.2.3.4
+        class SignatureCreationTime < Subpacket
+          TAG = 2
+          def initialize(time=nil)
+            super()
+            @data = time || Time.now.to_i
+          end
+
+          def self.parse_body(body, options={})
+            self.new(body.read_timestamp)
+          end
+
+          def body
+            [@data].pack('N')
+          end
+        end
+        class SignatureExpirationTime < Subpacket
+          TAG = 3
+          def initialize(time=nil)
+            super()
+            @data = time || Time.now.to_i
+          end
+
+          def self.parse_body(body, options={})
+            self.new(body.read_timestamp)
+          end
+
+          def body
+            [@data].pack('N')
+          end
+        end
+        class ExportableCertification < Subpacket
+          TAG = 4
+        end
+        class TrustSignature < Subpacket
+          TAG = 5
+        end
+        class RegularExpression < Subpacket
+          TAG = 6
+        end
+        class Revocable < Subpacket
+          TAG = 7
+        end
+        class KeyExpirationTime < Subpacket
+          TAG = 9
+          def initialize(time=nil)
+            super()
+            @data = time || Time.now.to_i
+          end
+
+          def self.parse_body(body, options={})
+            self.new(body.read_timestamp)
+          end
+
+          def body
+            [@data].pack('N')
+          end
+        end
+        class PreferredSymmetricAlgorithms < Subpacket
+          TAG = 11
+        end
+        class RevocationKey < Subpacket
+          TAG = 12
+        end
+
+        ##
+        # @see http://tools.ietf.org/html/rfc4880#section-5.2.3.5
+        class Issuer < Subpacket
+          TAG = 16
+          def initialize(keyid=nil)
+            super()
+            @data = keyid
+          end
+
+          def self.parse_body(body, options={})
+            data = ''
+            8.times do # Store KeyID in Hex
+              data << '%02X' % body.read_byte.ord
+            end
+            self.new(data)
+          end
+
+          def body
+            b = ''
+            0.step(@data.length, 2) do |i|
+              b << @data[i,2].to_i(16).chr
+            end
+            b
+          end
+        end
+        class NotationData < Subpacket
+          TAG = 20
+        end
+        class PreferredHashAlgorithms < Subpacket
+          TAG = 21
+        end
+        class PreferredCompressionAlgorithms < Subpacket
+          TAG = 22
+        end
+        class KeyServerPreferences < Subpacket
+          TAG = 23
+        end
+        class PreferredKeyServer < Subpacket
+          TAG = 24
+        end
+        class PrimaryUserID < Subpacket
+          TAG = 25
+        end
+        class PolicyURI < Subpacket
+          TAG = 26
+        end
+        class KeyFlags < Subpacket
+          TAG = 27
+        end
+        class SignersUserID < Subpacket
+          TAG = 28
+        end
+        class ReasonforRevocation < Subpacket
+          TAG = 29
+        end
+        class Features < Subpacket
+          TAG = 30
+        end
+        class SignatureTarget < Subpacket
+          TAG = 31
+        end
+        class EmbeddedSignature < Subpacket
+          TAG = 32
         end
     end
 
