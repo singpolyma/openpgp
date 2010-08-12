@@ -1,3 +1,5 @@
+require 'zlib'
+
 module OpenPGP
   ##
   # OpenPGP packet.
@@ -328,7 +330,48 @@ module OpenPGP
     #
     # @see http://tools.ietf.org/html/rfc4880#section-5.6
     class CompressedData < Packet
-      # TODO
+      include Enumerable
+      attr_accessor :algorithm, :data
+
+      def initialize(algorithm=nil, data=nil)
+        @algorithm = algorithm
+        @data = data
+      end
+
+      def self.parse_body(body, options={})
+        algorithm = body.read_byte.ord
+        data = body.read
+        data = Message::parse(case algorithm
+          when 0 # Uncompressed
+            data
+          when 1 # ZIP
+            Zlib::Inflate.new(-Zlib::MAX_WBITS).inflate(data)
+          when 2 # ZLIB
+            Zlib::Inflate.inflate(data)
+          when 3 # BZIP2
+            # TODO
+        end)
+        self.new(algorithm, data)
+      end
+
+      def body
+        body = algorithm.chr
+        body << case algorithm
+          when 0 # Uncompressed
+            data.to_s
+          when 1 # ZIP
+            Zlib::Deflate.new(nil, -Zlib::MAX_WBITS).deflate(data.to_s, Zlib::FINISH)
+          when 2 # ZLIB
+            Zlib::Deflate.deflate(data.to_s)
+          when 3 # BZIP2
+            # TODO
+        end
+      end
+
+      # Proxy onto embedded OpenPGP message
+      def each(&cb)
+        @data.each &cb
+      end
     end
 
     ##
