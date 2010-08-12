@@ -107,7 +107,7 @@ module OpenPGP
       block.call(self) if block_given?
     end
 
-    #def to_s() body end
+    def to_s() body end
 
     ##
     # @return [Integer]
