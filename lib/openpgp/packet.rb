@@ -429,6 +429,15 @@ module OpenPGP
         super(defaults.merge(options), &block)
       end
 
+      def normalize
+        # Normalize line endings
+        if format == :u || format == :t
+          @data.gsub!(/\r\n/, "\n")
+          @data.gsub!(/\r/, "\n")
+          @data.gsub!(/\n/, "\r\n")
+        end
+      end
+
       def write_body(buffer)
         buffer.write_byte(format)
         buffer.write_string(filename)
