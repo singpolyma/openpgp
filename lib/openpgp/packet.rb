@@ -162,6 +162,12 @@ module OpenPGP
       attr_accessor :hashed_subpackets, :unhashed_subpackets
       attr_accessor :hash_head, :trailer
 
+      def initialize(options={}, &blk)
+        @hashed_subpackets = []
+        @unhashed_subpackets = []
+        super(options, &blk)
+      end
+
       def self.parse_body(body, options = {})
         @hashed_subpackets = @unhashed_subpackets = []
         case version = body.read_byte
@@ -169,6 +175,19 @@ module OpenPGP
           when 4 then self.new(:version => 4).send(:read_v4_signature, body)
           else raise "Invalid OpenPGP signature packet version: #{version}"
         end
+      end
+
+      ##
+      # @params  [OpenPGP::Packet::LiteralData] m
+      # @params  [Hash] signers in the same format as verifiers for Message
+      def sign_data(m, signers)
+        self.type = m.format == :b ? 0x00 : 0x01
+        m.normalize # Line endings
+        update_trailer
+        signer = signers[key_algorithm_name][hash_algorithm_name]
+        self.fields = signer.call(m.data + trailer)
+        self.fields = [fields] unless fields.is_a?(Enumerable)
+        self.hash_head = fields.first[0,2].unpack('n').first
       end
 
       def key_algorithm_name
