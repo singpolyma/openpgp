@@ -54,18 +54,25 @@ module OpenPGP
         ##
         # @param  packet message to verify with @key, or key (OpenPGP or RSA) to check @message with
         # @param  [Integer] index specify which signature to verify (if there is more than one)
-        # @return OpenSSL::PKey::RSA
+        # @return Boolean
         def verify(packet, index=0)
           packet = OpenPGP::Message::parse(packet) if packet.is_a?(String)
-          if packet.is_a?(OpenPGP::Message) && !packet.is_a?(OpenPGP::Packet::PublicKey)
-            signature_packet, data_packet = packet.signature_and_data(index)
-            k = rsa_key(signature_packet.issuer)
-            return nil unless k && signature_packet.key_algorithm_name == 'RSA'
-            return packet.verify({'RSA' => {signature_packet.hash_algorithm_name => lambda {|m,s|
-              k.verify(signature_packet.hash_algorithm_name, s.first, m)
-            }}})
+          if packet.is_a?(OpenPGP::Message) && !packet.first.is_a?(OpenPGP::Packet::PublicKey)
+            m = packet
+            k = self
           else
+            m = @message
+            k = self.class.new(packet)
           end
+
+          return nil unless m
+          signature_packet, data_packet = m.signature_and_data(index)
+          k = k.rsa_key(signature_packet.issuer)
+          return nil unless k && signature_packet.key_algorithm_name == 'RSA'
+
+          return m.verify({'RSA' => {signature_packet.hash_algorithm_name => lambda {|m,s|
+            k.verify(signature_packet.hash_algorithm_name, s.first, m)
+          }}})
         end
 
         ##
