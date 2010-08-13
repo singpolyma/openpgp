@@ -76,6 +76,50 @@ module OpenPGP
         end
 
         ##
+        # @param  packet message to sign with @key or key (OpenPGP or RSA) to sign @message with
+        # @param  [String] hash name of hash function to use (default SHA256)
+        # @param  [String] keyid id of key to use (if there is more than one)
+        # @return OpenPGP::Message
+        def sign(packet, hash='SHA256', keyid=nil)
+          packet = unless packet.is_a?(OpenPGP::Packet) || packet.is_a?(OpenPGP::Message)
+            if @key
+              OpenPGP::Packet::LiteralData.new(:data => packet, :timestamp => Time.now.to_i)
+            else
+              OpenPGP::Message::parse(packet)
+            end
+          else
+            packet
+          end
+
+          if packet.is_a?(OpenPGP::Packet::SecretKey) || packet.is_a?(::OpenSSL::PKey::RSA) \
+             || (packet.is_a?(Enumerable) && packet.first.is_a?(OpenPGP::Packet::SecretKey))
+            m = @message
+            k = packet
+          else
+            m = packet
+            k = @key
+          end
+
+          return nil unless k && m # Missing some data
+
+          m = m.signature_and_data.first if m.is_a?(OpenPGP::Message)
+
+          unless k.is_a?(::OpenSSL::PKey::RSA)
+            k = self.class.new(k)
+            keyid = k.key.fingerprint[-16,16] unless keyid
+            k = k.rsa_key(keyid)
+          end
+
+          sig = OpenPGP::Packet::Signature.new(:version => 4,
+            :key_algorithm => OpenPGP::Algorithm::Asymmetric::RSA,
+            :hash_algorithm => OpenPGP::Digest::for(hash).to_i)
+          sig.hashed_subpackets << OpenPGP::Packet::Signature::Issuer.new(keyid)
+          sig.hashed_subpackets << OpenPGP::Packet::Signature::SignatureCreationTime.new(Time.now.to_i)
+          sig.sign_data(m, {'RSA' => {hash => lambda {|m| k.sign(hash, m)}}})
+          OpenPGP::Message.new([sig, m])
+        end
+
+        ##
         # @param  packet
         # @return [OpenSSL::PKey::RSA]
         def self.convert_key(packet)
@@ -91,6 +135,7 @@ module OpenPGP
           # Create blank key and fill the fields
           key = ::OpenSSL::PKey::RSA.new
           packet.each {|k,v|
+            next if k == :u # OpenSSL doesn't call it that
             if v.is_a?(Numeric)
               v = ::OpenSSL::BN.new(v.to_s)
             elsif !(v.is_a?(::OpenSSL::BN))
