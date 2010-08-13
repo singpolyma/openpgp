@@ -512,12 +512,12 @@ module OpenPGP
           when 2, 3
             Digest::MD5.hexdigest([key[:n], key[:e]].join).upcase
           when 4
-            material = [0x99.chr, [size].pack('n'), version.chr, [timestamp].pack('N'), algorithm.chr]
-            key_fields.each do |key_field|
-              material << [OpenPGP.bitlength(key[key_field])].pack('n')
-              material << key[key_field]
-            end
-            Digest::SHA1.hexdigest(material.join).upcase
+            head = [0x99.chr, nil, version.chr, [timestamp].pack('N'), algorithm.chr]
+            material = key_fields.map do |key_field|
+              [[OpenPGP.bitlength(key[key_field])].pack('n'), key[key_field]]
+            end.flatten.join
+            head[1] = [material.length + 6].pack('n')
+            Digest::SHA1.hexdigest((head + [material]).join).upcase
         end
       end
     end
@@ -541,7 +541,58 @@ module OpenPGP
     # @see http://tools.ietf.org/html/rfc4880#section-11.2
     # @see http://tools.ietf.org/html/rfc4880#section-12
     class SecretKey < PublicKey
-      # TODO
+      attr_accessor :s2k_useage, :symmetric_type, :s2k_type, :s2k_hash_algorithm
+      attr_accessor :s2k_salt, :s2k_count, :encrypted_data, :data
+
+      def self.parse_body(body, options={})
+        key = super # All the fields from PublicKey
+        data = {:s2k_useage => body.read_byte.ord}
+        if data[:s2k_useage] == 255 || data[:s2k_useage] == 254
+          data[:symmetric_type] = body.read_byte.ord
+          data[:s2k_type] = body.read_byte.ord
+          data[:s2k_hash_algorithm] = self.read_byte.ord
+          if data[:s2k_type] == 1 || data[:s2k_type] == 3
+            data[:s2k_salt] = body.read_bytes(8)
+          end
+          if data[:s2k_type] == 3
+            c = self.read_byte.ord
+            data[:s2k_count] = (16 + (c & 15)).floor << ((c >> 4) + 6)
+          end
+        elsif data[:s2k_useage] > 0
+          data[:symmetric_type] = data[:s2k_useage]
+        end
+       if data[:s2k_useage] > 0
+         # TODO: IV of the same length as cipher's block size
+         data[:encrypted_data] = body.read # Rest of input is MPIs and checksum (encrypted)
+       else
+         data[:data] = body.read # Rest of input is MPIs and checksum
+       end
+       data.each {|k,v| key.send("#{k}=", v) }
+       key.key_from_data
+       key
+      end
+
+      def key_from_data
+        return nil unless data # Not decrypted yet
+        @secret_key_fields = case algorithm
+          when Algorithm::Asymmetric::RSA,
+               Algorithm::Asymmetric::RSA_E,
+               Algorithm::Asymmetric::RSA_S then [:d, :p, :q, :u]
+          when Algorithm::Asymmetric::ELG_E then [:x]
+          when Algorithm::Asymmetric::DSA   then [:x]
+          else raise "Unknown OpenPGP key algorithm: #{algorithm}"
+        end
+        body = Buffer.new(data)
+        @secret_key_fields.each {|mpi|
+          self.key[mpi] = body.read_mpi
+        }
+        # TODO: Validate checksum?
+        if s2k_useage == 254 # 20 octet sha1 hash
+          @private_hash = body.read_bytes(20)
+        else # 2 octet checksum
+          @private_hash = body.read_bytes(2)
+        end
+      end
     end
 
     ##
