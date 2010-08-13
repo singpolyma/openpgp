@@ -107,11 +107,23 @@ module OpenPGP
       block.call(self) if block_given?
     end
 
-    def to_s() body end
+    def to_s
+      data = header_and_body
+      data[:header] + (data[:body] || '')
+    end
 
     ##
     # @return [Integer]
     def size() body.size end
+
+    ##
+    # @return [Hash]
+    def header_and_body
+      body = self.body # Get body first, we will need it's length
+      tag = (self.class.tag | 0xC0).chr # First two bits are 1 for new packet format
+      size = 255.chr + [body ? body.length : 0].pack('N') # Use 5-octet lengths
+      {:header => tag + size, :body => body}
+    end
 
     ##
     # @return [String]
@@ -184,11 +196,11 @@ module OpenPGP
       def body(trailer=false)
         body = 4.chr + type.chr + key_algorithm.chr + hash_algorithm.chr
 
-        sub = hashed_subpackets.inject('') {|c,p| c + p.to_s}
+        sub = hashed_subpackets.inject('') {|c,p| p.to_s + c}
         body << [sub.length].pack('n') + sub
 
         # The trailer is just the top of the body plus some crap
-        return body + 4.chr + 0xff.chr + [body.length].pack('N')
+        return body + 4.chr + 0xff.chr + [body.length].pack('N') if trailer
 
         sub = unhashed_subpackets.inject('') {|c,p| c + p.to_s}
         body << [sub.length].pack('n') + sub
@@ -266,8 +278,8 @@ module OpenPGP
             self.class.const_get(t).const_defined?(:TAG) && \
             self.class.const_get(t)::TAG == tag
           }.first).parse_body(Buffer.new(buf.read(length)), :tag => tag)
-        #rescue Exception
-        #  nil # Parse error, return no subpacket
+        rescue Exception
+          nil # Parse error, return no subpacket
         end
 
         ##
@@ -288,7 +300,7 @@ module OpenPGP
             b = body
             # Use 5-octet lengths + 1 for tag as first packet body octet
             size = 255.chr + [body.length+1].pack('N')
-            tag = self.get_const(:TAG).chr
+            tag = self.class.const_get(:TAG).chr
             {:header => size + tag, :body => body}
           end
         end
