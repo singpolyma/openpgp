@@ -293,10 +293,12 @@ module OpenPGP
           end
 
           tag = buf.read_byte.ord
+          critical = (tag & 0x80) != 0
+          tag &= 0x7F
           self.class.const_get(self.class.constants.select {|t|
             self.class.const_get(t).const_defined?(:TAG) && \
             self.class.const_get(t)::TAG == tag
-          }.first).parse_body(Buffer.new(buf.read(length)), :tag => tag)
+          }.first).parse_body(Buffer.new(buf.read(length-1)), :tag => tag)
         rescue Exception
           nil # Parse error, return no subpacket
         end
@@ -317,7 +319,7 @@ module OpenPGP
         class Subpacket < Packet
           def header_and_body
             b = body
-            # Use 5-octet lengths + 1 for tag as first packet body octet
+            # Use 5-octet lengths
             size = 255.chr + [body.length+1].pack('N')
             tag = self.class.const_get(:TAG).chr
             {:header => size + tag, :body => body}
