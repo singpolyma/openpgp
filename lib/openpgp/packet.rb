@@ -411,8 +411,8 @@ module OpenPGP
 
           def body
             b = ''
-            0.step(@data.length, 2) do |i|
-              b << @data[i,2].to_i(16).chr
+            @data.enum_for(:each_char).each_slice(2) do |i|
+              b << i.join.to_i(16).chr
             end
             b
           end
