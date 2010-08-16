@@ -426,11 +426,26 @@ module OpenPGP
         class PreferredCompressionAlgorithms < Subpacket
           TAG = 22
         end
+
+        ##
+        # @see http://tools.ietf.org/html/rfc4880#section-5.2.3.18
         class KeyServerPreferences < Subpacket
           TAG = 23
         end
         class PreferredKeyServer < Subpacket
           TAG = 24
+          def initialize(uri=nil)
+            super()
+            @data = uri
+          end
+
+          def self.parse_body(body, options={})
+            self.new(body.read)
+          end
+
+          def body
+            @data
+          end
         end
         class PrimaryUserID < Subpacket
           TAG = 25
