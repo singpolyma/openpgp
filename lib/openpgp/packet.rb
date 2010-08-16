@@ -205,7 +205,7 @@ module OpenPGP
       def issuer
         [hashed_subpackets + unhashed_subpackets].select {|packet|
           packet.is_a?(OpenPGP::Packet::Signature::Issuer)
-        }.first
+        }.first || key_id
       end
 
       def update_trailer
