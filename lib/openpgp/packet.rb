@@ -353,7 +353,7 @@ module OpenPGP
           TAG = 3
           def initialize(time=nil)
             super()
-            @data = time || Time.now.to_i
+            @data = time || 0
           end
 
           def self.parse_body(body, options={})
