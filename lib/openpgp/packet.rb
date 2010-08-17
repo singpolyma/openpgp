@@ -203,9 +203,14 @@ module OpenPGP
       end
 
       def issuer
-        [hashed_subpackets + unhashed_subpackets].select {|packet|
+        packet = (hashed_subpackets + unhashed_subpackets).select {|packet|
           packet.is_a?(OpenPGP::Packet::Signature::Issuer)
-        }.first || key_id
+        }.first
+        if packet
+          packet.data
+        else
+          key_id
+        end
       end
 
       def update_trailer
@@ -317,6 +322,7 @@ module OpenPGP
         end
 
         class Subpacket < Packet
+          attr_reader :data
           def header_and_body
             b = body
             # Use 5-octet lengths
