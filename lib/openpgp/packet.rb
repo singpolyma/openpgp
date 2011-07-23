@@ -220,7 +220,7 @@ module OpenPGP
       def body(trailer=false)
         body = 4.chr + type.chr + key_algorithm.chr + hash_algorithm.chr
 
-        sub = hashed_subpackets.inject('') {|c,p| p.to_s + c}
+        sub = hashed_subpackets.inject('') {|c,p| c + p.to_s}
         body << [sub.length].pack('n') + sub
 
         # The trailer is just the top of the body plus some crap
