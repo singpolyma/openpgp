@@ -278,7 +278,7 @@ module OpenPGP
             if packet = read_subpacket(buf)
               packets << packet
             else
-              raise "Invalid OpenPGP message data at position #{body.pos+buf.pos}"
+              raise "Invalid OpenPGP message data at position #{buf.pos} in signature subpackets"
             end
           end
           packets
