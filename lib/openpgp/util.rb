@@ -64,6 +64,9 @@ module OpenPGP
   # @return [Integer]
   # @see    http://tools.ietf.org/html/rfc4880#section-3.2
   def self.bitlength(data)
-    data.empty? ? 0 : (data.size - 1) * 8 + (Math.log(data[0].ord) / Math.log(2)).floor + 1
+    data = data.split(//)
+    while (f = data.shift) == '\0'; end
+    return 0 unless f
+    Math.log(f.ord, 2).floor + 1 + (data.length*8)
   end
 end
