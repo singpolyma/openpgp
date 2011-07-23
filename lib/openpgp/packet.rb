@@ -547,7 +547,7 @@ module OpenPGP
     class PublicKey < Packet
       attr_accessor :size
       attr_accessor :version, :timestamp, :algorithm
-      attr_accessor :key, :key_fields, :key_id, :fingerprint
+      attr_accessor :key, :key_id, :fingerprint
 
       #def parse(data) # FIXME
       def self.parse_body(body, options = {})
@@ -566,14 +566,29 @@ module OpenPGP
       ##
       # @see http://tools.ietf.org/html/rfc4880#section-5.5.2
       def read_key_material(body)
-        @key_fields = case algorithm
+        key_fields.each { |field| key[field] = body.read_mpi }
+        @key_id = fingerprint[-8..-1]
+      end
+
+      def key_fields
+        case algorithm
           when Algorithm::Asymmetric::RSA   then [:n, :e]
           when Algorithm::Asymmetric::ELG_E then [:p, :g, :y]
           when Algorithm::Asymmetric::DSA   then [:p, :q, :g, :y]
           else raise "Unknown OpenPGP key algorithm: #{algorithm}"
         end
-        @key_fields.each { |field| key[field] = body.read_mpi }
-        @key_id = fingerprint[-8..-1]
+      end
+
+      def fingerprint_material
+        case version
+          when 2, 3
+            [key[:n], key[:e]].join
+          when 4
+            material = key_fields.map do |key_field|
+              [[OpenPGP.bitlength(key[key_field])].pack('n'), key[key_field]]
+            end.flatten.join
+            [0x99.chr, [material.length + 6].pack('n'), version.chr, [timestamp].pack('N'), algorithm.chr, material]
+        end
       end
 
       ##
@@ -582,14 +597,18 @@ module OpenPGP
       def fingerprint
         @fingerprint ||= case version
           when 2, 3
-            Digest::MD5.hexdigest([key[:n], key[:e]].join).upcase
+            Digest::MD5.hexdigest(fingerprint_material.join).upcase
           when 4
-            head = [0x99.chr, nil, version.chr, [timestamp].pack('N'), algorithm.chr]
-            material = key_fields.map do |key_field|
-              [[OpenPGP.bitlength(key[key_field])].pack('n'), key[key_field]]
-            end.flatten.join
-            head[1] = [material.length + 6].pack('n')
-            Digest::SHA1.hexdigest((head + [material]).join).upcase
+            Digest::SHA1.hexdigest(fingerprint_material.join).upcase
+        end
+      end
+
+      def body
+        case version
+          when 2, 3
+            # TODO
+          when 4
+            fingerprint_material[2..-1].join
         end
       end
     end
@@ -646,16 +665,8 @@ module OpenPGP
 
       def key_from_data
         return nil unless data # Not decrypted yet
-        @secret_key_fields = case algorithm
-          when Algorithm::Asymmetric::RSA,
-               Algorithm::Asymmetric::RSA_E,
-               Algorithm::Asymmetric::RSA_S then [:d, :p, :q, :u]
-          when Algorithm::Asymmetric::ELG_E then [:x]
-          when Algorithm::Asymmetric::DSA   then [:x]
-          else raise "Unknown OpenPGP key algorithm: #{algorithm}"
-        end
         body = Buffer.new(data)
-        @secret_key_fields.each {|mpi|
+        secret_key_fields.each {|mpi|
           self.key[mpi] = body.read_mpi
         }
         # TODO: Validate checksum?
@@ -663,6 +674,39 @@ module OpenPGP
           @private_hash = body.read_bytes(20)
         else # 2 octet checksum
           @private_hash = body.read_bytes(2)
+        end
+      end
+
+      def secret_key_fields
+        case algorithm
+          when Algorithm::Asymmetric::RSA,
+               Algorithm::Asymmetric::RSA_E,
+               Algorithm::Asymmetric::RSA_S then [:d, :p, :q, :u]
+          when Algorithm::Asymmetric::ELG_E then [:x]
+          when Algorithm::Asymmetric::DSA   then [:x]
+          else raise "Unknown OpenPGP key algorithm: #{algorithm}"
+        end
+      end
+
+      def body
+        super + s2k_useage.to_i.chr + \
+        if s2k_useage == 255 || s2k_useage == 254
+          symmetric_type.chr + s2k_type.chr + s2k_hash_algorithm.chr + \
+          (s2k_type == 1 || s2k_type == 3 ? s2k_salt : '')
+          # (s2k_type == 3 ? reverse ugly bit manipulation
+        end.to_s + if s2k_useage.to_i > 0
+          encrypted_data
+        else
+          secret_material = secret_key_fields.map {|f| [OpenPGP.bitlength(key[f].to_s)].pack('n') + key[f].to_s}.join
+        end + \
+        if s2k_useage == 254 # SHA1 checksum
+          # TODO
+          "\0"*20
+        else # 2-octet checksum
+          # TODO, this design will not work for encrypted keys
+          [secret_material.split(//).inject(0) {|chk, c|
+            chk = (chk + c.ord) % 65536
+          }].pack('n')
         end
       end
     end
