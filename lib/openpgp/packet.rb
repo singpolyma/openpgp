@@ -486,7 +486,7 @@ module OpenPGP
         class ReasonforRevocation < Subpacket
           TAG = 29
         end
-        class Features < Subpacket
+        class Features < KeyFlags
           TAG = 30
         end
         class SignatureTarget < Subpacket
