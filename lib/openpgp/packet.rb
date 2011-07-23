@@ -265,7 +265,7 @@ module OpenPGP
           unhashed_count = body.read_number(2)
           unhashed_data = body.read_bytes(unhashed_count)
           @unhashed_subpackets = read_subpackets(Buffer.new(unhashed_data))
-          @hash_head = body.read_bytes(2)
+          @hash_head = body.read_bytes(2).unpack('n').first
           read_signature(body)
           self
         end
