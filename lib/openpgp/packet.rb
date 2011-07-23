@@ -178,14 +178,23 @@ module OpenPGP
       end
 
       ##
-      # @params  [OpenPGP::Packet::LiteralData] m
+      # @params  [OpenPGP::Packet::LiteralData | OpenPGP::Message] m
       # @params  [Hash] signers in the same format as verifiers for Message
       def sign_data(m, signers)
-        self.type = m.format == :b ? 0x00 : 0x01
-        m.normalize # Line endings
+        data = if m.is_a?(LiteralData)
+          self.type = m.format == :b ? 0x00 : 0x01
+          m.normalize # Line endings
+          m.data
+        else
+          # m must be message where PublicKey is first, UserID is second
+          m = m.to_a # Se we can index into it
+          key = m[0].fingerprint_material.join
+          user_id = m[1].body
+          key + 0xB4.chr + [user_id.length].pack('N') + user_id
+        end
         update_trailer
         signer = signers[key_algorithm_name][hash_algorithm_name]
-        self.fields = signer.call(m.data + trailer)
+        self.fields = signer.call(data + trailer)
         self.fields = [fields] unless fields.is_a?(Enumerable)
         self.hash_head = fields.first[0,2].unpack('n').first
       end
