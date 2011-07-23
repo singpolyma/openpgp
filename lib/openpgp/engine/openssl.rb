@@ -120,6 +120,38 @@ module OpenPGP
         end
 
         ##
+        # @param  packet message with key/userid packets to sign (@key must be set)
+        # @param  [String] hash name of hash function to use (default SHA256)
+        # @param  [String] keyid id of key to use (if there is more than one)
+        # @return OpenPGP::Message
+        def sign_key_userid(packet, hash='SHA256', keyid=nil)
+          if packet.is_a?(String)
+            packet = OpenPGP::Message.parse(packet)
+          elsif !packet.is_a?(OpenPGP::Message)
+            packet = OpenPGP::Message.new(packet)
+          end
+
+          return nil unless @key && packet # Missing some data
+
+          keyid = key.fingerprint[-16,16] unless keyid
+
+          sig = packet.signature_and_data[1]
+          unless sig
+            sig = OpenPGP::Packet::Signature.new(:version => 4,
+              :key_algorithm => OpenPGP::Algorithm::Asymmetric::RSA,
+              :hash_algorithm => OpenPGP::Digest::for(hash).to_i,
+              :type => 0x13)
+            sig.hashed_subpackets << OpenPGP::Packet::Signature::SignatureCreationTime.new(Time.now.to_i)
+            sig.hashed_subpackets << OpenPGP::Packet::Signature::KeyFlags.new(0x01 | 0x02)
+            sig.unhashed_subpackets << OpenPGP::Packet::Signature::Issuer.new(keyid)
+            packet << sig
+          end
+          sig.sign_data(packet, {'RSA' => {hash => lambda {|m| rsa_key.sign(hash, m)}}})
+
+          packet
+        end
+
+        ##
         # @param  packet
         # @return [OpenSSL::PKey::RSA]
         def self.convert_key(packet)
