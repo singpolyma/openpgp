@@ -232,7 +232,7 @@ module OpenPGP
         body << [hash_head].pack('n')
 
         fields.each {|data|
-          body << [data.length*8].pack('n')
+          body << [OpenPGP.bitlength(data)].pack('n')
           body << data
         }
         body
