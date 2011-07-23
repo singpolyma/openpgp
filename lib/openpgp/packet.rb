@@ -461,6 +461,24 @@ module OpenPGP
         end
         class KeyFlags < Subpacket
           TAG = 27
+          attr_accessor :flags
+
+          def initialize(*flags)
+            super()
+            @flags = flags.flatten
+          end
+
+          def self.parse_body(body, options={})
+            flags = []
+            until body.eof?
+              flags << body.read_byte.ord
+            end
+            self.new(flags)
+          end
+
+          def body
+            flags.map {|f| f.chr}.join
+          end
         end
         class SignersUserID < Subpacket
           TAG = 28
