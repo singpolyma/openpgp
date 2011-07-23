@@ -895,7 +895,7 @@ module OpenPGP
         buffer.write(to_s)
       end
 
-      def to_s
+      def body
         text = []
         text << name if name
         text << "(#{comment})" if comment
